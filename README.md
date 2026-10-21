@@ -1,24 +1,25 @@
-# template Loup commandline application
+# loup-cmd-tsort
 
-A GitHub template for a command-line application written in
-[Loup](https://code-craft.ai/references/loup). It includes argument parsing,
-command dispatch, a sample `hello` command, tests, a native build and a CI
-workflow.
+GNU `tsort` recreated in [Loup](https://code-craft.ai/references/loup):
+read pairs of items, each saying that one comes before the other, and write
+all the items in one order that respects every pair, in exactly the order
+GNU tsort writes them; report loops the way GNU does, break them and go on.
+The BSD options `-l` (report the longest loop) and `-q` (quiet) are added.
 
-After creating a repository from this template, work through
-[REPOSITORY_TODOS.md](REPOSITORY_TODOS.md).
+Part of the **loup-cmd** series of example applications: classic Linux and
+Windows commands, and projects for each Loup execution mode, each in its own
+repository under [myronccai](https://github.com/myronccai?tab=repositories&q=loup-cmd).
+This one is `host.dual` Loup built as a native binary.
 
 ## Requirements
 
 - [Loup Lite](https://github.com/code-craft-ai-company/loup-releases) 1.26.0
   or later; see [Installing Loup Lite](#installing-loup-lite).
-- `make`
-- `clang` 17 or later for native builds. Native builds are supported on Linux
-  x86-64 and arm64, and are a preview on macOS and Windows.
+- `make`, and `clang` 17 or later for the native build.
 
 ## Installing Loup Lite
 
-This project is built and tested with **Loup Lite**, the free public build of
+This example is built and tested with **Loup Lite**, the free public build of
 the Loup toolchain from [Code Craft AI](https://code-craft.ai), meant for
 education and training. Code Craft AI publishes the official builds,
 installers and signed checksums at
@@ -61,70 +62,128 @@ check it against `SHA256SUMS`, unpack it anywhere and add its `bin` directory to
 explains how to verify the Sigstore signature on `SHA256SUMS`.
 
 Loup Lite leaves out Loup's cryptography library and the full set of Loup
-packages; this project needs neither. Commercial use of Loup needs a
+packages; this example needs neither. Commercial use of Loup needs a
 license: <https://code-craft.ai/loup/license>.
 
 ## Usage
 
 ```sh
-make run ARGS="--help"            # run from source
-make run ARGS="hello Ann --shout"
-make check                        # type-check the program
-make test                         # run the tests in tests/
-make build                        # native binary: build/myapp
-make ci                           # check, test, build and smoke-test the binary
-make clean
+make build                                         # native binary: build/tsort
+make ci                                            # check, unit tests, build, end-to-end tests
+make run ARGS="tests/fixtures/build.txt"           # run from source with loup run
 ```
 
 ```text
-$ build/myapp --help
-usage: myapp [OPTIONS] COMMAND [ARGS...]
-
-A command-line application written in Loup.
-
-Commands:
-  hello [NAME]          Print a greeting (NAME defaults to 'world')
-  help                  Show this help
-
-Options:
-  -g, --greeting TEXT   Greeting used by 'hello' (default: Hello)
-      --shout           Print the greeting in upper case
-  -v, --verbose         Print diagnostic messages to stderr
-  -h, --help            Show this help and exit
-  -V, --version         Show the version and exit
+$ head -4 tests/fixtures/build.txt
+config.h main.o
+config.h parse.o
+config.h eval.o
+lexer.c lexer.o
+$ build/tsort tests/fixtures/build.txt
+config.h
+lexer.c
+libm
+parse.y
+eval.o
+main.o
+lexer.o
+parse.c
+parse.o
+calc
+$ build/tsort tests/fixtures/loops.txt; echo "exit $?"
+docs
+app
+tsort: tests/fixtures/loops.txt: input contains a loop:
+tsort: net
+tsort: tls
+net
+tls
+tsort: tests/fixtures/loops.txt: input contains a loop:
+tsort: theme
+tsort: ui
+tsort: widgets
+theme
+ui
+widgets
+exit 1
+$ printf 'a b\nb a\nb c\nc d\nd a\n' | build/tsort -l; echo "exit $?"
+tsort: -: input contains a loop:
+tsort: a
+tsort: b
+tsort: c
+tsort: d
+tsort: -: input contains a loop:
+tsort: a
+tsort: b
+a
+b
+c
+d
+exit 1
+$ echo 'a b c' | build/tsort; echo "exit $?"
+tsort: -: input contains an odd number of tokens
+exit 1
 ```
 
-Exit status: `0` success, `1` runtime failure, `2` usage error.
+The items with no predecessor come first, in byte order; after that each
+item follows as soon as everything before it has been written, which is
+GNU's order (the same input gives the same output as `LC_ALL=C tsort`).
+When the remaining items all wait on a loop, the loop is reported on
+standard error, one of its pairs is dropped, and sorting goes on, so every
+item is still written once.
+
+Options:
+
+| Option | Meaning |
+|---|---|
+| `-l` | report the longest loop through the first stuck item instead of the first loop GNU's search finds (BSD tsort) |
+| `-q` | do not report loops; the exit status still says there was one (BSD tsort) |
+| `--help`, `--version` | print help or the version and exit (may be shortened: `--he`) |
+
+The input is FILE, or standard input when there is no FILE or it is `-`.
+Items are separated by spaces, tabs and newlines; `--` ends the options.
+
+Exit status: `0` if the input was sorted without loops; `1` if it
+contained a loop (with or without `-q`), could not be read, had an odd
+number of items, or the command line was wrong.
+
+## Differences from the original
+
+- `-l` and `-q` come from BSD tsort; GNU tsort has no options but `--help`
+  and `--version`. Without them the output and messages are GNU's.
+- `-l` searches at most 100,000 path extensions per loop on very dense
+  inputs, then reports the longest loop found so far.
+- File names in messages are quoted like GNU's for the usual cases
+  (`'my file'`, `"it's"`, `'a:b'`); a name with bytes outside ASCII is
+  single-quoted as it is, where GNU in the C locale writes `$'\303\251'`
+  escapes.
+- `--version` prints one line and `--help` a shorter text.
+- The whole input is read into memory first.
+- A file that exists but cannot be read is found by asking `test -r`
+  first (the native runtime cannot catch the read error); the message is
+  GNU's `Permission denied`.
 
 ## Layout
 
 ```text
-package.lppkg            # Loup manifest
-Makefile                 # run, check, test, build, ci, clean
-LICENSE                  # MIT license
-source/                  # the application's Loup code
-├── main.loup            # entry point
-├── cli/                 # argument parsing, help text, command dispatch
-└── commands/            # one module per command
-tests/                   # *_test.loup files
-specs/                   # feature specs: requirements, design, tasks
-skills/loup-programmer/  # agent skill for writing Loup
+source/main.loup                 # entry point
+source/appinfo.loup              # name, version, exit statuses
+source/cli/args.loup             # options: --help, --version, -l, -q, one operand
+source/cli/usage.loup            # --help and --version text
+source/cli/app.loup              # run(): parse, dispatch, exit status
+source/commands/tsort.loup       # reading the input, pairs to a graph, printing
+source/commands/tokens.loup      # Tokens: an iterator over the items
+source/commands/graph.loup       # Graph[T]: nodes, predecessor counts, successor lists
+source/commands/order.loup       # GNU's order and loop search, as a list of events
+source/commands/cycles.loup      # -l: strongly connected components, longest cycle
+tests/*_test.loup                # unit tests (make test)
+tests/fixtures/                  # sample inputs for the tests and this README
+tests/e2e.sh                     # end-to-end tests of build/tsort (make e2e)
+specs/tsort/                     # requirements, design, tasks
 ```
 
-[AGENTS.md](AGENTS.md) has the full layout, every build and test command, and
-the steps for adding a command.
-
-## Notes on the toolchain
-
-- On Linux x86-64, `loup` is the self-hosted driver and `loup-bootstrap` is
-  Stage0. `check` and `test` use `loup-bootstrap`; on other platforms both
-  names run the same tool. The Makefile handles this.
-- Modules import each other by their path under `source/`
-  (`from cli.args import (Options);`). Tests import them the same way, which
-  is why `make test` puts `source/` on `LOUPPATH`.
-- The Wasm build (`loup-bootstrap build`) is experimental: modules that use
-  `i"..."` interpolation build but trap at run time, so this template builds
-  native binaries.
+[AGENTS.md](AGENTS.md) has every build and test command and the conventions
+for changing the code.
 
 ## License
 

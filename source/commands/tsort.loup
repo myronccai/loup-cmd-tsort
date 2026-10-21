@@ -1,0 +1,161 @@
+@mode(host.dual)
+
+# tsort's run: read the input, turn its pairs into a graph, sort it the way
+# GNU tsort does, and print the items and any loops.
+#
+# Runtime: host.dual. Compiled into the native binary build/tsort by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: reading the input (with GNU's messages for files that cannot
+# be read, and its quoting of file names); relations_from (items to
+# nodes, pairs to edges); run_tsort, the only function that prints.
+
+from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE);
+from cli.args import (Options);
+from commands.graph import (Graph);
+from commands.tokens import (Tokens);
+from commands.order import (Event, walk_order, gnu_order);
+from io.fs import (isDir);
+from io.proc import (exitCode);
+
+# The input as a graph: one node per distinct item, labelled with it, and
+# one edge per pair.
+pub class Relations {
+    pub var graph: Graph[string] = Graph();
+    # True when the last item had no partner.
+    pub var odd: bool = false;
+    pub var items: int = 0;
+}
+
+# Reads the items of `text` two at a time. Items are numbered in the order
+# they first appear; each pair becomes a tuple of two node numbers, and the
+# edges are added in input order once all are read.
+pub func relations_from(text: string): Relations {
+    let result = Relations();
+    var index: dict[string, int] = {};
+    var pairs: list[(int, int)] = [];
+    let tokens = Tokens(text);
+    var first = -1;
+    var done = false;
+    while (!done) {
+        var item: Option[string] = None;
+        safe {
+            item = tokens.next();
+        }
+        match item {
+            Some(word) => {
+                if (!index.containsKey(word)) {
+                    safe {
+                        index[word] = result.graph.add_node(word);
+                    }
+                }
+                let node = index[word];
+                if (first < 0) {
+                    first = node;
+                } else {
+                    pairs.push((first, node));
+                    first = -1;
+                }
+            },
+            None => {
+                done = true;
+            },
+        }
+    }
+    safe {
+        for (pair in pairs) {
+            result.graph.add_edge(pair);
+        }
+        result.odd = first >= 0;
+        result.items = tokens.count;
+    }
+    return result;
+}
+
+# Characters that GNU's shell-style quoting leaves bare in a file name.
+const BARE: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%+,-./=@^_~";
+
+# A file name as GNU's messages show it (quotef): bare when every
+# character is harmless to a shell (and it does not start with `~`),
+# otherwise in single quotes, or in double quotes when it contains a
+# single quote and nothing a shell expands inside double quotes.
+pub func quote_name(name: string): string {
+    var bare = name.len() > 0 and !name.startsWith("~");
+    for (ch in name) {
+        if (BARE.index_of(ch) < 0) {
+            bare = false;
+        }
+    }
+    if (bare) {
+        return name;
+    }
+    if (!name.contains("'")) {
+        return "'" + name + "'";
+    }
+    if (!name.contains("\"") and !name.contains("$") and !name.contains("`") and !name.contains("\\")) {
+        return "\"" + name + "\"";
+    }
+    return "'" + name.replace("'", "'\\''") + "'";
+}
+
+# Why `file` cannot be read, in GNU's words, or "" when it can. The native
+# runtime cannot catch the error of reading a missing or unreadable file,
+# so this asks first.
+func unreadable(file: string): string {
+    if (file == "-") {
+        return "";
+    }
+    if (!exists(file)) {
+        return "No such file or directory";
+    }
+    if (exitCode(["test", "-r", file]) != 0) {
+        return "Permission denied";
+    }
+    if (isDir(file)) {
+        return "read error: Is a directory";
+    }
+    return "";
+}
+
+pub func run_tsort(opts: Options): int {
+    let shown = quote_name(opts.file);
+    let problem = unreadable(opts.file);
+    if (problem != "") {
+        printErr(APP_NAME + ": " + shown + ": " + problem);
+        return EXIT_FAILURE;
+    }
+    var text = "";
+    if (opts.file == "-") {
+        text = readText("/dev/stdin");
+    } else {
+        text = readText(opts.file);
+    }
+    let relations = relations_from(text);
+    if (relations.odd) {
+        printErr(APP_NAME + ": " + shown + ": input contains an odd number of tokens");
+        return EXIT_FAILURE;
+    }
+    let graph = relations.graph;
+    let walk = walk_order(graph);
+    let events = gnu_order(edits: graph, walk, opts.longest);
+    var status = EXIT_OK;
+    for (event in events) {
+        match event {
+            Event.Output(node) => {
+                println(graph.label(node));
+            },
+            Event.LoopFound => {
+                status = EXIT_FAILURE;
+                if (!opts.quiet) {
+                    printErr(APP_NAME + ": " + shown + ": input contains a loop:");
+                }
+            },
+            Event.InLoop(node) => {
+                if (!opts.quiet) {
+                    printErr(APP_NAME + ": " + graph.label(node));
+                }
+            },
+        }
+    }
+    return status;
+}

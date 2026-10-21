@@ -1,0 +1,12 @@
+config.h main.o
+config.h parse.o
+config.h eval.o
+lexer.c lexer.o
+parse.y parse.c
+parse.c parse.o
+lexer.o parse.o
+main.o calc
+parse.o calc
+eval.o calc
+lexer.o calc
+libm calc

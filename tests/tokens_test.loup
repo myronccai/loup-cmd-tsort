@@ -1,0 +1,62 @@
+@mode(host.dual)
+
+# Unit tests for commands.tokens: how tsort's input splits into items.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
+from debug.assert import (expect, expectEq);
+from commands.tokens import (Tokens);
+
+# All the items of `text`, joined with `|`.
+func items(text: string): string {
+    let tokens = Tokens(text);
+    var parts: list[string] = [];
+    var done = false;
+    while (!done) {
+        var next: Option[string] = None;
+        safe {
+            next = tokens.next();
+        }
+        match next {
+            Some(word) => {
+                parts.push(word);
+            },
+            None => {
+                done = true;
+            },
+        }
+    }
+    return parts.join("|");
+}
+
+func test_separators(): void {
+    expectEq(items("a b\tc\nd"), "a|b|c|d", "space, tab and newline");
+    expectEq(items("  a \n\n\t b  "), "a|b", "runs of separators");
+    expectEq(items("a\rb c\r\n"), "a\rb|c\r", "a carriage return is part of an item");
+    expectEq(items(""), "", "no items");
+}
+
+func test_count_and_end(): void {
+    let tokens = Tokens("x y z");
+    var seen = 0;
+    var more = true;
+    while (more) {
+        var next: Option[string] = None;
+        safe {
+            next = tokens.next();
+        }
+        more = next.is_some();
+        if (more) {
+            seen += 1;
+        }
+    }
+    expectEq(seen, 3, "three items");
+    expectEq(tokens.count, 3, "counted");
+    var after: Option[string] = Some("unset");
+    safe {
+        after = tokens.next();
+    }
+    expect(after.is_none(), "None again after the end");
+}

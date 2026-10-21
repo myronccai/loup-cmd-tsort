@@ -1,0 +1,92 @@
+@mode(host.dual)
+
+# Unit tests for commands.graph: the generic Graph[T] with string and int
+# labels, predecessor counts, successor lists in GNU's order, releasing a
+# written node and unlinking an edge.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
+from debug.assert import (expect, expectEq);
+from commands.graph import (Graph);
+
+func numbers(xs: list[int]): string {
+    var parts: list[string] = [];
+    for (x in xs) {
+        parts.push(str(x));
+    }
+    return parts.join(",");
+}
+
+# a -> b, a -> c, c -> b, recorded in that order.
+func small(): Graph[string] {
+    let g: Graph[string] = Graph();
+    safe {
+        g.add_node("a");
+        g.add_node("b");
+        g.add_node("c");
+        g.add_edge((0, 1));
+        g.add_edge((0, 2));
+        g.add_edge((2, 1));
+    }
+    return g;
+}
+
+func test_nodes_and_labels(): void {
+    let g = small();
+    expectEq(g.size(), 3, "three nodes");
+    expectEq(g.label(2), "c", "labels kept");
+    expectEq(g.waiting_count(0), 0, "a has no predecessor");
+    expectEq(g.waiting_count(1), 2, "b waits for a and c");
+}
+
+func test_successors_newest_first(): void {
+    let g = small();
+    expectEq(numbers(g.successors(0)), "2,1", "a's last pair comes first");
+    expectEq(numbers(g.successors(1)), "", "b has none");
+}
+
+func test_self_pairs_and_repeats(): void {
+    let g: Graph[int] = Graph();
+    safe {
+        g.add_node(7);
+        g.add_node(8);
+        g.add_edge((0, 0));
+        g.add_edge((0, 1));
+        g.add_edge((0, 1));
+    }
+    expectEq(g.waiting_count(0), 0, "a self pair is not an edge");
+    expectEq(g.waiting_count(1), 2, "a repeated pair counts twice");
+    expectEq(g.label(1), 8, "int labels");
+}
+
+func test_release_frees_successors(): void {
+    let g = small();
+    var freed: list[int] = [];
+    safe {
+        freed = g.release(0);
+    }
+    expectEq(numbers(freed), "2", "c is free, b still waits for c");
+    safe {
+        freed = g.release(2);
+    }
+    expectEq(numbers(freed), "1", "then b");
+}
+
+func test_remove_edge(): void {
+    let g = small();
+    let newest = g.newest_edge(0);
+    expectEq(g.target(newest), 2, "a's newest edge goes to c");
+    let older = g.older_edge(newest);
+    safe {
+        g.remove_edge(0, older);
+    }
+    expectEq(numbers(g.successors(0)), "2", "a -> b is gone");
+    expectEq(g.waiting_count(1), 1, "b now waits for c only");
+    safe {
+        g.remove_edge(0, newest);
+    }
+    expectEq(numbers(g.successors(0)), "", "the head can be removed too");
+    expectEq(g.waiting_count(2), 0, "c is free");
+}

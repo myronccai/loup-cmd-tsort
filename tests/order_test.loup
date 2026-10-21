@@ -1,0 +1,129 @@
+@mode(host.dual)
+
+# Unit tests for commands.order: the order in which GNU tsort writes items
+# and reports loops. Every expected string is GNU tsort 9.5's output for
+# the same input (with LC_ALL=C), written as one line: the items in output
+# order, `|loop:` for "input contains a loop:" and `~X` for each item of
+# the loop it reports.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
+from debug.assert import (expect, expectEq);
+from commands.order import (Event, walk_order, gnu_order);
+from commands.tsort import (relations_from);
+from commands.graph import (Graph);
+
+# The events of sorting `text`, as one line.
+func sorted_line(text: string, longest: bool): string {
+    let relations = relations_from(text);
+    let graph = relations.graph;
+    let walk = walk_order(graph);
+    let events = gnu_order(edits: graph, walk, longest);
+    var parts: list[string] = [];
+    for (event in events) {
+        match event {
+            Event.Output(node) => {
+                parts.push(graph.label(node));
+            },
+            Event.LoopFound => {
+                parts.push("|loop:");
+            },
+            Event.InLoop(node) => {
+                parts.push("~" + graph.label(node));
+            },
+        }
+    }
+    return parts.join(" ");
+}
+
+func gnu(text: string): string {
+    return sorted_line(text, false);
+}
+
+func test_walk_order_is_byte_order(): void {
+    let graph = relations_from("pear apple fig banana Zoo 10 9 _x").graph;
+    var labels: list[string] = [];
+    for (node in walk_order(graph)) {
+        labels.push(graph.label(node));
+    }
+    expectEq(labels.join(" "), "10 9 Zoo _x apple banana fig pear", "digits, upper case, _, lower case");
+}
+
+func test_chains(): void {
+    expectEq(gnu("a b\nb c\n"), "a b c", "a chain");
+    expectEq(gnu("c d\na b\nb c\n"), "a b c d", "the input order does not matter");
+    expectEq(gnu("a b\na b\nb c\n"), "a b c", "a repeated pair");
+}
+
+func test_free_items_start_in_byte_order(): void {
+    expectEq(gnu("b a\nc a\n"), "b c a", "b and c are free, in byte order");
+    expectEq(gnu("Z a\n10 9\n"), "10 Z 9 a", "the free 10 and Z in byte order, then 9 and a as they are freed");
+    expectEq(gnu("a a\nb b\n"), "a b", "pairs of one item only add the item");
+}
+
+func test_successors_come_last_pair_first(): void {
+    # main's pairs were main-parse, then main-eval: eval is freed first.
+    expectEq(gnu("main parse\nmain eval\nparse lex\neval lex\nlex util\neval util\n"),
+        "main eval parse lex util", "a small build graph");
+}
+
+func test_a_loop_behind_free_items(): void {
+    expectEq(gnu("x y\ny z\nz x\na b\n"), "a b |loop: ~x ~y ~z x y z", "the free items come first");
+}
+
+func test_nested_loops(): void {
+    expectEq(gnu("a b\nb c\nc a\nc d\nd e\ne c\nb d\n"),
+        "|loop: ~a ~b ~d ~e ~c a b |loop: ~c ~d ~e c d e", "two loops sharing c");
+    expectEq(gnu("a b\nb a\nb c\nc d\nd a\n"),
+        "|loop: ~a ~b |loop: ~a ~b ~c ~d a b c d", "GNU reports the short loop first");
+    expectEq(gnu("p1 p2\np2 p3\np3 p1\nq1 q2\nq2 q1\n"),
+        "|loop: ~p1 ~p2 ~p3 p1 p2 p3 |loop: ~q1 ~q2 q1 q2", "two separate loops");
+}
+
+func test_longest_loop_first_with_l(): void {
+    expectEq(sorted_line("a b\nb a\nb c\nc d\nd a\n", true),
+        "|loop: ~a ~b ~c ~d |loop: ~a ~b a b c d", "-l reports the four-item loop first");
+    expectEq(sorted_line("x y\ny z\nz x\na b\n", true), "a b |loop: ~x ~y ~z x y z", "one loop: the same as GNU");
+}
+
+func test_every_item_once(): void {
+    let line = gnu("a b\nb c\nc a\nc d\nd e\ne c\nb d\n");
+    var items = 0;
+    for (part in line.split(" ")) {
+        if (!part.startsWith("~") and !part.startsWith("|")) {
+            items += 1;
+        }
+    }
+    expectEq(items, 5, "five items written");
+}
+
+func test_an_int_graph(): void {
+    # gnu_order is generic: it works on any Graph[T].
+    let graph: Graph[int] = Graph();
+    safe {
+        for (n in 0..4) {
+            graph.add_node(n * 10);
+        }
+        graph.add_edge((3, 1));
+        graph.add_edge((1, 0));
+        graph.add_edge((2, 0));
+    }
+    let events = gnu_order(edits: graph, [0, 1, 2, 3], false);
+    var labels: list[string] = [];
+    for (event in events) {
+        match event {
+            Event.Output(node) => {
+                labels.push(str(graph.label(node)));
+            },
+            Event.LoopFound => {
+                labels.push("loop");
+            },
+            Event.InLoop(node) => {
+                labels.push("in");
+            },
+        }
+    }
+    expectEq(labels.join(" "), "20 30 10 0", "free nodes in walk order, then the queue");
+}

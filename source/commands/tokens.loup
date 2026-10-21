@@ -1,0 +1,41 @@
+@mode(host.dual)
+
+# tsort's tokenizer: the items of the input, one at a time.
+#
+# Runtime: host.dual. Compiled into the native binary build/tsort by
+# `make build`; `loup run source/main.loup` interprets the same code.
+
+# The separators: GNU tsort splits only at these three bytes, so a `\r` or
+# a form feed is part of an item.
+const SPACE: string = " ";
+const TAB: string = "\t";
+const NEWLINE: string = "\n";
+
+# An iterator over the items of a text: next() gives each in turn, then
+# None. It is driven by calling next() in a loop rather than with
+# `for (x in ...)`, which runs a user-defined iterator zero times in the
+# Loup 1.26.0 native build.
+pub class Tokens implements Iterator[string] {
+    let words: list[string];
+    var position: int = 0;
+    # How many items next() has returned.
+    pub var count: int = 0;
+
+    new(text: string) {
+        # Splitting on bytes keeps every other byte as it is, also in
+        # input that is not valid UTF-8.
+        this.words = text.replace(TAB, SPACE).replace(NEWLINE, SPACE).split(SPACE);
+    }
+
+    pub modifier func next(): Option[string] {
+        while (this.position < this.words.len()) {
+            let word = this.words[this.position];
+            this.position += 1;
+            if (word.len() > 0) {
+                this.count += 1;
+                return Some(word);
+            }
+        }
+        return None;
+    }
+}

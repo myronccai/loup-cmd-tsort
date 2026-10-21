@@ -1,0 +1,45 @@
+@mode(host.dual)
+
+# Unit tests for commands.tsort: reading pairs into a graph, the odd-count
+# check, and how file names are quoted in messages (GNU's quotef).
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
+from debug.assert import (expect, expectEq);
+from commands.tsort import (Relations, relations_from, quote_name);
+
+func test_items_become_nodes_in_first_seen_order(): void {
+    let r = relations_from("b a\nc b\n");
+    expectEq(r.graph.size(), 3, "three items");
+    expectEq(r.graph.label(0), "b", "b first");
+    expectEq(r.graph.label(2), "c", "c last");
+    expectEq(r.items, 4, "four tokens");
+    expect(!r.odd, "even");
+}
+
+func test_pairs_become_edges(): void {
+    let r = relations_from("b a\nc b\n");
+    expectEq(r.graph.waiting_count(0), 1, "b waits for c");
+    expectEq(r.graph.waiting_count(1), 1, "a waits for b");
+    expectEq(r.graph.waiting_count(2), 0, "c is free");
+}
+
+func test_odd_count(): void {
+    let r = relations_from("a b c\n");
+    expect(r.odd, "c has no partner");
+    expectEq(r.items, 3, "three tokens");
+}
+
+func test_quote_name(): void {
+    expectEq(quote_name("-"), "-", "standard input");
+    expectEq(quote_name("deps.txt"), "deps.txt", "plain");
+    expectEq(quote_name("x~"), "x~", "a tilde after the start");
+    expectEq(quote_name("a,b%c"), "a,b%c", "other harmless characters");
+    expectEq(quote_name("my file"), "'my file'", "a space");
+    expectEq(quote_name("a:b"), "'a:b'", "a colon");
+    expectEq(quote_name("~x"), "'~x'", "a leading tilde");
+    expectEq(quote_name("it's"), "\"it's\"", "a single quote");
+    expectEq(quote_name("it's $5"), "'it'\\''s $5'", "both kinds of trouble");
+}

@@ -1,25 +1,35 @@
 @mode(host.dual)
 
-# Exit statuses of the whole command line. These tests print the program's
-# normal output and error messages.
+# Exit statuses of whole command lines through cli.app.run, on fixture
+# files. These tests print tsort's normal output and messages.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`; it reads tests/fixtures/. It is
+# not part of the binary.
 
 from debug.assert import (expectEq);
-from appinfo import (EXIT_OK, EXIT_USAGE);
+from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.app import (run);
 
 func test_version_succeeds(): void {
     expectEq(run(["--version"]), EXIT_OK, "--version");
 }
 
-func test_hello_succeeds(): void {
-    expectEq(run(["hello", "tests"]), EXIT_OK, "hello NAME");
+func test_sorting_a_file_succeeds(): void {
+    expectEq(run(["tests/fixtures/build.txt"]), EXIT_OK, "an acyclic input");
 }
 
-func test_unknown_command_is_usage_error(): void {
-    expectEq(run(["bogus"]), EXIT_USAGE, "unknown command");
+func test_a_loop_fails(): void {
+    expectEq(run(["tests/fixtures/loops.txt"]), EXIT_FAILURE, "a loop");
+    expectEq(run(["-q", "tests/fixtures/loops.txt"]), EXIT_FAILURE, "also with -q");
 }
 
-func test_missing_command_is_usage_error(): void {
-    let none: list[string] = [];
-    expectEq(run(none), EXIT_USAGE, "no command");
+func test_missing_file_fails(): void {
+    expectEq(run(["tests/fixtures/no-such-file"]), EXIT_FAILURE, "missing file");
+}
+
+func test_usage_error_fails(): void {
+    expectEq(run(["-x"]), EXIT_FAILURE, "unknown option");
+    expectEq(run(["a", "b"]), EXIT_FAILURE, "extra operand");
 }

@@ -1,0 +1,186 @@
+@mode(host.dual)
+
+# tsort's ordering: GNU tsort's version of Knuth's topological sort
+# (algorithm T, The Art of Computer Programming 2.2.3), its search for a
+# loop when the sort gets stuck, and the order in which it visits items.
+#
+# Runtime: host.dual. Compiled into the native binary build/tsort by
+# `make build`; `loup run source/main.loup` interprets the same code, and
+# tests/order_test.loup checks it against GNU tsort's output.
+#
+# Structure: Event (what tsort prints, in order); walk_order (the byte
+# order of the labels, which is how GNU walks its search tree of items);
+# gnu_order (rounds of writing every item that is free, then finding and
+# breaking one loop when items remain); gnu_loop, GNU's loop search.
+
+from structures.priority_queue import (PriorityQueue);
+from structures.ordered_set import (OrderedSet);
+from commands.graph import (Graph);
+from commands.cycles import (Cycle, longest_cycle);
+
+# What tsort writes, in the order it writes it. The caller turns these
+# into lines on standard output and standard error, so the order can be
+# tested as a value.
+pub enum Event {
+    # Write this node's label on standard output.
+    Output(int),
+    # Report that the input contains a loop.
+    LoopFound,
+    # One node of that loop, in the order GNU reports them.
+    InLoop(int),
+}
+
+# The nodes in byte order of their labels: GNU keeps its items in a
+# balanced search tree ordered by strcmp and walks it in order. A heap of
+# node numbers compared by label, drained, gives the same sequence.
+pub func walk_order(graph: Graph[string]): list[int] {
+    var labels: list[string] = [];
+    for (node in 0..graph.size()) {
+        labels.push(graph.label(node));
+    }
+    let heap: PriorityQueue[int] = PriorityQueue(func(a: int, b: int): int {
+        return labels[a].compareTo(labels[b]);
+    });
+    safe {
+        for (node in 0..labels.len()) {
+            heap.push(node);
+        }
+    }
+    var order: list[int] = [];
+    safe {
+        order = heap.drain();
+    }
+    return order;
+}
+
+# The events of a run of GNU tsort over `graph`, whose nodes are visited
+# in `walk` order. With `longest` (`-l`), each loop reported is the
+# longest one through the first stuck node that is on a loop, instead of
+# the one GNU's search finds. The graph is consumed: predecessor counts
+# drop to zero and the edges that closed loops are removed.
+pub func gnu_order[T](edits graph: Graph[T], walk: list[int], longest: bool): list[Event] {
+    let total = graph.size();
+    var events: list[Event] = [];
+    # The nodes written so far, in output order.
+    let written = OrderedSet();
+    # GNU's ready queue is first in, first out. Each node that becomes
+    # ready gets the next ticket; the queue hands out the lowest ticket.
+    let ready: PriorityQueue[int] = PriorityQueue(func(a: int, b: int): int {
+        return a - b;
+    });
+    var ticket_node: list[int] = [];
+
+    while (written.len() < total) {
+        # Every node that is free and not yet written joins the queue, in
+        # walk order.
+        for (node in walk) {
+            if (graph.waiting_count(node) == 0 and !written.contains(node)) {
+                ticket_node.push(node);
+                safe {
+                    ready.push(ticket_node.len() - 1);
+                }
+            }
+        }
+        while (ready.len() > 0) {
+            var ticket = 0;
+            safe {
+                ticket = ready.pop();
+            }
+            let node = ticket_node[ticket];
+            events.push(Event.Output(node));
+            written.add(node);
+            var freed: list[int] = [];
+            safe {
+                freed = graph.release(node);
+            }
+            for (next in freed) {
+                ticket_node.push(next);
+                safe {
+                    ready.push(ticket_node.len() - 1);
+                }
+            }
+        }
+        if (written.len() == total) {
+            break;
+        }
+
+        # Stuck: the remaining nodes all wait on a loop. Report one and
+        # remove the edge that closes it, then go round again.
+        events.push(Event.LoopFound);
+        var cycle = Cycle();
+        if (longest) {
+            cycle = longest_cycle(graph, walk);
+        }
+        if (cycle.nodes.len() > 0) {
+            for (node in cycle.nodes) {
+                events.push(Event.InLoop(node));
+            }
+            safe {
+                graph.remove_edge(cycle.nodes[cycle.nodes.len() - 1], cycle.closing_edge);
+            }
+        } else {
+            gnu_loop(edits: graph, walk, edits: events);
+        }
+    }
+    return events;
+}
+
+# GNU's loop search. It walks the nodes, growing a chain backwards from
+# the first waiting node: a node with the chain's head among its
+# successors becomes the new head. When such a node is already in the
+# chain, the chain from the head back to it is a loop: its nodes are
+# reported, the edge that closed it is removed, and the search stops. The
+# walk is repeated until a loop has been found.
+func gnu_loop[T](edits graph: Graph[T], walk: list[int], edits events: list[Event]): void {
+    # `chain[node]` is the node added to the chain before it (-1: none),
+    # and `head` the node added last (-1: no chain yet).
+    var chain: list[int] = [];
+    for (node in 0..graph.size()) {
+        chain.push(-1);
+    }
+    var head = -1;
+    do {
+        walk: for (node in walk) {
+            if (graph.waiting_count(node) == 0) {
+                continue;
+            }
+            if (head < 0) {
+                head = node;
+                continue;
+            }
+            var edge = graph.newest_edge(node);
+            while (edge >= 0) {
+                if (graph.target(edge) == head) {
+                    # As in GNU, "already in the chain" means having a
+                    # link, which the chain's first node does not: it is
+                    # added a second time instead.
+                    if (chain[node] < 0) {
+                        chain[node] = head;
+                        head = node;
+                        continue walk;
+                    }
+                    while (head >= 0) {
+                        let previous = chain[head];
+                        events.push(Event.InLoop(head));
+                        if (head == node) {
+                            safe {
+                                graph.remove_edge(node, edge);
+                            }
+                            break;
+                        }
+                        chain[head] = -1;
+                        head = previous;
+                    }
+                    # Clear what is left of the chain.
+                    while (head >= 0) {
+                        let previous = chain[head];
+                        chain[head] = -1;
+                        head = previous;
+                    }
+                    break walk;
+                }
+                edge = graph.older_edge(edge);
+            }
+        }
+    } while (head >= 0);
+}

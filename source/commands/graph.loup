@@ -1,0 +1,118 @@
+@mode(host.dual)
+
+# tsort's graph: a directed graph whose nodes carry labels of any type T
+# (tsort's are strings, the unit tests also use ints), with what Knuth's
+# topological sort needs: per node, how many predecessors are still
+# waiting to be written, and its successors in GNU tsort's order.
+#
+# Runtime: host.dual. Compiled into the native binary build/tsort by
+# `make build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: nodes are numbered from 0 in the order they are added. The
+# successor lists are linked lists kept in index arrays, as GNU keeps
+# linked lists of pointers: `newest[node]` is the edge recorded last for
+# that node and `edge_older[e]` the edge recorded before e (-1 ends the
+# list). New edges go in front, so a node's successors come out last pair
+# first, as in GNU, and one edge can be unlinked when a loop is broken.
+
+pub class Graph[T] {
+    var labels: list[T] = [];
+    # Predecessors of each node that have not been written yet.
+    var waiting: list[int] = [];
+    var newest: list[int] = [];
+    var edge_target: list[int] = [];
+    var edge_older: list[int] = [];
+
+    # Adds a node and returns its number.
+    pub modifier func add_node(label: T): int {
+        this.labels.push(label);
+        this.waiting.push(0);
+        this.newest.push(-1);
+        return this.labels.len() - 1;
+    }
+
+    # Records that `edge.0` comes before `edge.1`. A pair naming one node
+    # twice says nothing and is not recorded; a repeated pair is recorded
+    # again (and counts twice), as GNU does.
+    pub modifier func add_edge(edge: (int, int)): void {
+        let before = edge.0;
+        let after = edge.1;
+        if (before == after) {
+            return;
+        }
+        this.edge_target.push(after);
+        this.edge_older.push(this.newest[before]);
+        this.newest[before] = this.edge_target.len() - 1;
+        this.waiting[after] += 1;
+    }
+
+    pub func size(): int {
+        return this.labels.len();
+    }
+
+    pub func label(node: int): T {
+        return this.labels[node];
+    }
+
+    pub func waiting_count(node: int): int {
+        return this.waiting[node];
+    }
+
+    # The node's newest edge, then each older one: -1 ends the list.
+    pub func newest_edge(node: int): int {
+        return this.newest[node];
+    }
+
+    pub func older_edge(edge: int): int {
+        return this.edge_older[edge];
+    }
+
+    pub func target(edge: int): int {
+        return this.edge_target[edge];
+    }
+
+    # The successors of `node`, newest edge first.
+    pub func successors(node: int): list[int] {
+        var out: list[int] = [];
+        var e = this.newest[node];
+        while (e >= 0) {
+            out.push(this.edge_target[e]);
+            e = this.edge_older[e];
+        }
+        return out;
+    }
+
+    # `node` has been written: each of its edges stops counting for its
+    # successor. Returns the successors this frees (whose last waiting
+    # predecessor it was), in the order GNU finds them.
+    pub modifier func release(node: int): list[int] {
+        var freed: list[int] = [];
+        var e = this.newest[node];
+        while (e >= 0) {
+            let next = this.edge_target[e];
+            this.waiting[next] -= 1;
+            if (this.waiting[next] == 0) {
+                freed.push(next);
+            }
+            e = this.edge_older[e];
+        }
+        return freed;
+    }
+
+    # Unlinks `edge` from the successors of `node` (to break a loop).
+    pub modifier func remove_edge(node: int, edge: int): void {
+        this.waiting[this.edge_target[edge]] -= 1;
+        if (this.newest[node] == edge) {
+            this.newest[node] = this.edge_older[edge];
+            return;
+        }
+        var e = this.newest[node];
+        while (e >= 0) {
+            if (this.edge_older[e] == edge) {
+                this.edge_older[e] = this.edge_older[edge];
+                return;
+            }
+            e = this.edge_older[e];
+        }
+    }
+}

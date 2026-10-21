@@ -1,0 +1,195 @@
+@mode(host.dual)
+
+# tsort's longest-loop search for `-l` (an option of BSD tsort): instead of
+# GNU's first loop, report the longest loop through the first stuck item
+# that lies on one, so that the whole circle of dependencies shows at once.
+#
+# Runtime: host.dual. Compiled into the native binary build/tsort by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: Cycle (the result); components, Tarjan's strongly connected
+# components of the items still waiting (an item lies on a loop exactly
+# when its component has two or more items); longest_cycle, a depth-first
+# search for the longest simple cycle through one item, kept inside its
+# component. Both searches keep their own stack of edge cursors instead of
+# recursing. The cycle search is capped: the longest cycle is a hard
+# problem, and a dense component has very many paths.
+
+from commands.graph import (Graph);
+
+# How many path extensions one search may make before it settles for the
+# longest cycle found so far.
+pub const STEP_LIMIT: int = 100000;
+
+# A loop: its nodes in edge order, starting with the one the search began
+# at, and the edge from the last node back to the first.
+pub class Cycle {
+    pub var nodes: list[int] = [];
+    pub var closing_edge: int = -1;
+}
+
+# The strongly connected component of every waiting node (-1 for nodes
+# already written), numbered from 0, and how many nodes each has.
+pub class Components {
+    pub var of_node: list[int] = [];
+    pub var sizes: list[int] = [];
+}
+
+func smaller(a: int, b: int): int {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+# Tarjan's algorithm over the waiting nodes, roots taken in walk order.
+# `order[node]` is when the search first reached the node and `low[node]`
+# the earliest such time reachable from it through the search tree and one
+# more edge; a node whose `low` is its own time closes a component, which
+# is everything above it on `pending`.
+pub func components[T](graph: Graph[T], walk: list[int]): Components {
+    let n = graph.size();
+    let result = Components();
+    var order: list[int] = [];
+    var low: list[int] = [];
+    var on_pending: list[bool] = [];
+    var of_node: list[int] = [];
+    for (node in 0..n) {
+        order.push(-1);
+        low.push(0);
+        on_pending.push(false);
+        of_node.push(-1);
+    }
+    var pending: list[int] = [];
+    var sizes: list[int] = [];
+    var time = 0;
+    for (root in walk) {
+        if (graph.waiting_count(root) == 0 or order[root] >= 0) {
+            continue;
+        }
+        var calls: list[int] = [root];
+        var cursors: list[int] = [graph.newest_edge(root)];
+        order[root] = time;
+        low[root] = time;
+        time += 1;
+        pending.push(root);
+        on_pending[root] = true;
+        while (calls.len() > 0) {
+            let depth = calls.len() - 1;
+            let node = calls[depth];
+            let edge = cursors[depth];
+            if (edge >= 0) {
+                cursors[depth] = graph.older_edge(edge);
+                let next = graph.target(edge);
+                if (graph.waiting_count(next) == 0) {
+                    continue;
+                }
+                if (order[next] < 0) {
+                    order[next] = time;
+                    low[next] = time;
+                    time += 1;
+                    pending.push(next);
+                    on_pending[next] = true;
+                    calls.push(next);
+                    cursors.push(graph.newest_edge(next));
+                } else if (on_pending[next]) {
+                    low[node] = smaller(low[node], order[next]);
+                }
+                continue;
+            }
+            # All of node's edges are done: return to its caller.
+            calls.pop();
+            cursors.pop();
+            if (calls.len() > 0) {
+                let caller = calls[calls.len() - 1];
+                low[caller] = smaller(low[caller], low[node]);
+            }
+            if (low[node] == order[node]) {
+                let id = sizes.len();
+                var size = 0;
+                var member = -1;
+                do {
+                    member = pending.pop();
+                    on_pending[member] = false;
+                    of_node[member] = id;
+                    size += 1;
+                } while (member != node);
+                sizes.push(size);
+            }
+        }
+    }
+    safe {
+        result.of_node = of_node;
+        result.sizes = sizes;
+    }
+    return result;
+}
+
+# The longest simple cycle through the first node of `walk` that lies on
+# a cycle; an empty Cycle when no waiting node does. The search only
+# visits that node's component (no cycle through it leaves it) and tries
+# successors newest edge first, so among cycles of one length the first
+# found in that order wins.
+pub func longest_cycle[T](graph: Graph[T], walk: list[int]): Cycle {
+    let best = Cycle();
+    let parts = components(graph, walk);
+    var start = -1;
+    for (node in walk) {
+        let id = parts.of_node[node];
+        if (id >= 0 and parts.sizes[id] > 1) {
+            start = node;
+            break;
+        }
+    }
+    if (start < 0) {
+        return best;
+    }
+    let component = parts.of_node[start];
+    # The current path (nodes[0] is the start), the next edge to try from
+    # each of its nodes, and which nodes are on it.
+    var nodes: list[int] = [start];
+    var cursors: list[int] = [graph.newest_edge(start)];
+    var on_path: list[bool] = [];
+    for (node in 0..graph.size()) {
+        on_path.push(false);
+    }
+    on_path[start] = true;
+    var steps = 0;
+    search: while (nodes.len() > 0) {
+        let depth = nodes.len() - 1;
+        let edge = cursors[depth];
+        if (edge < 0) {
+            # Every way on from this node has been tried: back up.
+            on_path[nodes[depth]] = false;
+            nodes.pop();
+            cursors.pop();
+            continue;
+        }
+        cursors[depth] = graph.older_edge(edge);
+        let next = graph.target(edge);
+        if (next == start) {
+            if (nodes.len() > best.nodes.len()) {
+                var found: list[int] = [];
+                for (node in nodes) {
+                    found.push(node);
+                }
+                safe {
+                    best.nodes = found;
+                    best.closing_edge = edge;
+                }
+            }
+            continue;
+        }
+        if (on_path[next] or parts.of_node[next] != component) {
+            continue;
+        }
+        steps += 1;
+        if (steps > STEP_LIMIT) {
+            break search;
+        }
+        on_path[next] = true;
+        nodes.push(next);
+        cursors.push(graph.newest_edge(next));
+    }
+    return best;
+}

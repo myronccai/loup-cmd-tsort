@@ -1,28 +1,31 @@
 @mode(host.dual)
 
-from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY);
-from cli.args import (DEFAULT_GREETING);
+# The --help text and the --version line of tsort.
+#
+# Runtime: host.dual. Compiled into the native binary build/tsort by `make
+# build`; `loup run source/main.loup` interprets the same code.
+
+from appinfo import (APP_NAME, APP_VERSION);
 
 pub func usage(): string {
     let lines = [
-        i"usage: {$ APP_NAME $} [OPTIONS] COMMAND [ARGS...]",
+        i"Usage: {$ APP_NAME $} [OPTION] [FILE]",
+        "Write totally ordered list consistent with the partial ordering in FILE.",
         "",
-        APP_SUMMARY,
+        "With no FILE, or when FILE is -, read standard input.",
         "",
-        "Commands:",
-        "  hello [NAME]          Print a greeting (NAME defaults to 'world')",
-        "  help                  Show this help",
+        "  -l                report the longest loop instead of the first found",
+        "  -q                do not report loops",
+        "      --help        display this help and exit",
+        "      --version     output version information and exit",
         "",
-        "Options:",
-        i"  -g, --greeting TEXT   Greeting used by 'hello' (default: {$ DEFAULT_GREETING $})",
-        "      --shout           Print the greeting in upper case",
-        "  -v, --verbose         Print diagnostic messages to stderr",
-        "  -h, --help            Show this help and exit",
-        "  -V, --version         Show the version and exit",
+        "FILE holds pairs of items separated by blanks or newlines; each pair",
+        "says that the first item comes before the second. Items in a loop are",
+        "reported on standard error, and the exit status is then 1.",
     ];
     return lines.join("\n");
 }
 
 pub func version_line(): string {
-    return i"{$ APP_NAME $} {$ APP_VERSION $}";
+    return i"{$ APP_NAME $} (loup-cmd-{$ APP_NAME $}) {$ APP_VERSION $}";
 }
